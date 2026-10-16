@@ -2,40 +2,40 @@
 
 # Elegant::Perl
 
-### Явные контракты. Небольшие объекты. Меньше скрытых соглашений.
+### Explicit Contracts. Small Objects. Fewer Hidden Conventions.
 
-Фреймворк для объектного Perl-кода с обязательными полями, сгенерированным конструктором и проверяемыми контрактами.
+A framework for object-oriented Perl code with required fields, generated constructors, and enforceable contracts.
 
 [![CPAN version](https://img.shields.io/cpan/v/Elegant-Perl?label=CPAN)](https://metacpan.org/release/Elegant-Perl)
 [![Perl](https://img.shields.io/badge/Perl-5.32%2B-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
-[![License](https://img.shields.io/badge/license-not%20specified-lightgrey)](#лицензия)
+[![License](https://img.shields.io/badge/license-not%20specified-lightgrey)](#license)
 
 </div>
 
-> **Статус:** ранняя версия `0.01`. API и правила пока могут меняться.
+> **Status:** Early version `0.01`. The API and conventions are still subject to change.
 
-## Что это
+## What It Is
 
-`Elegant::Perl` — набор соглашений и инструментов для небольших Perl-приложений, которым полезны явные границы между объектами и их контрактами. Это не новый язык и не система статической типизации: модули остаются обычным Perl-кодом, а часть ошибок обнаруживается при загрузке класса или во время вызова метода.
+`Elegant::Perl` is a set of conventions and tools for small Perl applications that benefit from explicit boundaries between objects and their contracts. It is neither a new language nor a static type system: modules remain ordinary Perl code, and some errors are detected when a class is loaded or a method is called.
 
-В комплект входят:
+It includes:
 
-- `Elegant::Perl` — DSL для классов: `field`, `implements`, `cap`, закрытое состояние и автоматически созданный `new()`;
-- `Elegant::Perl::Contract` — декларации методов, типов аргументов и результатов;
-- набор политик Perl::Critic и команда `elegant-perl check` для проверки файлов, использующих Elegant::Perl.
+- `Elegant::Perl` — a class DSL with `field`, `implements`, `cap`, private state, and an automatically generated `new()`;
+- `Elegant::Perl::Contract` — declarations of methods, argument types, and return types;
+- a set of Perl::Critic policies and the `elegant-perl check` command for checking files that use Elegant::Perl.
 
-## Что дает
+## What It Provides
 
-- **Одинаковое создание объектов.** `new()` принимает именованные параметры, проверяет неизвестные и повторяющиеся имена, требует значения для каждого объявленного поля и проверяет явно заданные типы полей.
-- **Скрытое состояние.** Поля читаются через пакетную функцию `value($self, 'field')`, а не через доступ к хешу объекта. Сам объект не хранит поля в доступном вызывающему коду хеше.
-- **Явные контракты.** Класс перечисляет реализуемые интерфейсы, а фреймворк проверяет полноту и совместимость методов при завершении определения класса.
-- **Проверки времени выполнения.** Для контрактных методов с `:Expects(...)` и `:Returns(...)` проверяются количество и типы аргументов и возвращаемого значения.
-- **Выбор синтаксических возможностей.** Теги импорта включают строгий режим, bundle-функции Perl 5.32, сигнатуры, оператор `isa`, а также совместимые `try`/`defer`.
-- **Единый стиль.** Perl::Critic-политики выявляют некоторые конструкции, которые противоречат модели Elegant::Perl.
+- **Consistent object construction.** `new()` accepts named arguments, rejects unknown and duplicate names, requires a value for every declared field, and validates explicitly declared field types.
+- **Encapsulated state.** Fields are read through the package function `value($self, 'field')`, rather than by accessing an object's hash. The object itself does not store fields in a hash accessible to calling code.
+- **Explicit contracts.** A class lists the interfaces it implements, and the framework checks method completeness and compatibility when the class definition is finalized.
+- **Runtime checks.** For contract methods with `:Expects(...)` and `:Returns(...)`, the number and types of arguments and the return value are checked.
+- **Opt-in language features.** Import tags enable strict mode, the Perl 5.32 feature bundle, signatures, the `isa` operator, and compatibility implementations of `try`/`defer`.
+- **Consistent style.** Perl::Critic policies detect certain constructs that conflict with the Elegant::Perl model.
 
-## Быстрый старт
+## Quick Start
 
-Контракт можно объявить в отдельном модуле:
+A contract can be declared in a separate module:
 
 ```perl
 package Example::Contract::Greeter;
@@ -51,7 +51,7 @@ sub greet
 1;
 ```
 
-Класс реализует контракт и объявляет поля. Публичные методы работают с закрытыми значениями через `value()`:
+A class implements the contract and declares its fields. Public methods access private values through `value()`:
 
 ```perl
 package Example::Greeter;
@@ -69,36 +69,36 @@ sub greet ($self, $name) {
 1;
 ```
 
-После загрузки этих модулей классом можно пользоваться так:
+After loading these modules, the class can be used as follows:
 
 ```perl
-my $greeter = Example::Greeter->new(prefix => 'Привет, ');
-say $greeter->greet('мир');
+my $greeter = Example::Greeter->new(prefix => 'Hello, ');
+say $greeter->greet('world');
 ```
 
-Если контракт содержит `:Expects(Str) :Returns(Str)`, реализация автоматически получает runtime-проверки для одного аргумента-строки и результата-строки. Для manipulators используется `:Manipulator`; он означает `:Returns(Void)` и не возвращает значение.
+If a contract specifies `:Expects(Str) :Returns(Str)`, the implementation automatically receives runtime checks for one string argument and a string return value. Manipulators use `:Manipulator`, which implies `:Returns(Void)` and does not return a value.
 
-### Контракты и типы
+### Contracts and Types
 
-Каждый метод контракта должен иметь ровно одну семантическую метку:
+Every contract method must have exactly one semantic annotation:
 
-- `:Builder` — метод возвращает значение и должен указать ровно один тип через `:Returns(Type)`;
-- `:Manipulator` — метод не возвращает значения; `:Returns(Void)` подразумевается.
+- `:Builder` — the method returns a value and must specify exactly one type through `:Returns(Type)`;
+- `:Manipulator` — the method returns no value; `:Returns(Void)` is implied.
 
-Для аргументов применяется `:Expects(Type, Type, ...)`. Доступные типы: `Scalar`, `Object`, `Self`, `Bool`, `Int`, `Num`, `Str`, `Void` (только как маркер результата), имя контракта Elegant::Perl или имя сгенерированного cap. `Self` означает точный класс реализации, `Object` — любой blessed-объект, имя контракта — объект, реализующий соответствующий контракт. Проверки типов активны для типов, объявленных в контракте.
+Arguments are declared using `:Expects(Type, Type, ...)`. Supported types are `Scalar`, `Object`, `Self`, `Bool`, `Int`, `Num`, `Str`, `Void` (only as a return marker), an Elegant::Perl contract name, or a generated cap type name. `Self` means the exact implementing class, `Object` means any blessed object, and a contract name means an object implementing that contract. Type checks apply to types declared in the contract.
 
-### Типы полей и аргументы конструктора
+### Field Types and Constructor Arguments
 
-`field` принимает необязательное имя типа. Конструктор проверяет переданное значение:
+`field` accepts an optional type name. The constructor validates the supplied value:
 
 ```perl
 field 'customer' => 'Example::Customer::Cap::Billing';
 field 'amount'   => 'Num';
 field 'greeter'  => 'Example::Contract::Greeter';
-field 'label'; # без ограничения конкретным типом
+field 'label'; # no specific type restriction
 ```
 
-Для поля с типом cap нужно явно передать выданный cap:
+A field typed as a cap requires an explicitly issued cap:
 
 ```perl
 my $billing = Example::Billing->new(
@@ -109,15 +109,15 @@ my $billing = Example::Billing->new(
 );
 ```
 
-Полный `Example::Customer`, другой cap и поддельный blessed-объект не удовлетворяют типу `Example::Customer::Cap::Billing`. Автоматического преобразования в cap нет.
+A full `Example::Customer` object, a different cap, or a forged blessed object does not satisfy the `Example::Customer::Cap::Billing` type. There is no automatic conversion to a cap.
 
-Поддерживаются `Scalar`, `Object`, `Self`, `Bool`, `Int`, `Num`, `Str`, имена контрактов и сгенерированных cap — те же типы значений, что в контрактах методов. Произвольное имя класса типом не является; `Void` запрещен. Валидаторы типов создаются при финализации класса, а значения проверяются при вызове `new()`.
+Supported types are `Scalar`, `Object`, `Self`, `Bool`, `Int`, `Num`, `Str`, contract names, and generated cap types—the same value types supported by method contracts. An arbitrary class name is not a valid type; `Void` is not allowed. Type validators are created when the class is finalized, and values are checked when `new()` is called.
 
-Все поля остаются обязательными. Независимо от наличия типа, `undef` и неblessed-ссылки запрещены. Объявление `field 'label'` сохраняет прежнее поведение: принимает любой определенный скаляр или blessed-объект. Проверки выполняются во время выполнения, статической типизации нет.
+All fields remain required. Regardless of whether a type is specified, `undef` and unblessed references are not allowed. Declaring `field 'label'` preserves the existing behavior: it accepts any defined scalar or blessed object. Checks are performed at runtime; there is no static typing.
 
-### Cap: ограниченный интерфейс объекта
+### Cap: A Restricted Object Interface
 
-Cap — сокращение от capability: именованный набор возможностей конкретного объекта. Класс объявляет `cap` как хеш публичных имен и реализующих их замыканий, а `as_cap()` выдает объект с этими возможностями. Фреймворк генерирует отдельный тип, а каждое замыкание получает исходный объект как `$self`. Публичные имена не зависят от имен внутренних полей:
+Cap is short for *capability*: a named set of capabilities associated with a particular object. A class declares a `cap` as a hash of public method names mapped to their implementing closures, and `as_cap()` issues an object exposing those capabilities. The framework generates a distinct type, and each closure receives the original object as `$self`. Public method names are independent of internal field names:
 
 ```perl
 package Example::Customer;
@@ -137,23 +137,23 @@ cap 'Public' => {
 };
 ```
 
-Владелец полного объекта явно выдает cap:
+Code holding the full object explicitly issues a cap:
 
 ```perl
 my $customer = Example::Customer->new(
-    name          => 'Alice',
+    name            => 'Alice',
     billing_address => 'alice@example.test',
-    password_hash => 'secret',
+    password_hash   => 'secret',
 );
 
 my $billing = $customer->as_cap('Billing');
-say $billing->email;          # alice@example.test
+say $billing->email;                # alice@example.test
 say $billing->greeting('Hello, '); # Hello, Alice
-# $billing->password_hash;   # ошибка: метод недоступен
-# $billing->as_cap('Public'); # ошибка: cap не выдает другие cap
+# $billing->password_hash;         # error: method not available
+# $billing->as_cap('Public');      # error: a cap cannot issue other caps
 ```
 
-Тип `Example::Customer::Cap::Billing` можно использовать в контрактах:
+The `Example::Customer::Cap::Billing` type can be used in contracts:
 
 ```perl
 package Example::Contract::InvoiceSender;
@@ -165,80 +165,80 @@ sub send_invoice
     :Expects(Example::Customer::Cap::Billing);
 ```
 
-Получатель принимает именно выданный cap: полный `Example::Customer`, другой cap или поддельный blessed-объект не проходят проверку. `:Returns(Example::Customer::Cap::Billing)` проверяется аналогично. Отдельный модуль для сгенерированного типа не нужен: при разрешении типа фреймворк загружает модуль владельца.
+The recipient accepts only the issued cap: the full `Example::Customer` object, another cap, or a forged blessed object fails validation. `:Returns(Example::Customer::Cap::Billing)` is checked in the same way. No separate module is needed for the generated type: the framework loads the owner's module when resolving the type.
 
-Правила cap:
+Cap rules:
 
-- Декларация принимает ровно имя и непустой хеш методов. Каждое значение должно быть `CODE`-ссылкой. Старый синтаксис со списком полей не поддерживается.
-- Имя cap и имена методов — идентификаторы без `::`. Конфликты с инфраструктурными методами (`new`, `as_cap`, `DESTROY`, `can` и другими) запрещены. Пространство имен `Class::Cap::Name` принадлежит фреймворку. Повторяющиеся ключи хеша обрабатываются по обычным правилам Perl: остается последнее значение.
-- Cap предоставляет только объявленные методы. Он не наследует методы владельца и не имеет публичного конструктора. Переданный хеш копируется при декларации: его последующие изменения не меняют интерфейс cap.
-- Замыкания получают исходный объект, затем аргументы вызова. Сигнатуры Perl могут ограничивать аргументы. Контекст вызова (scalar/list/void), результаты и исключения передаются без изменений; неявных проверок типов результатов замыканий нет.
-- Исходные данные не копируются. Cap удерживает исходный объект до своего освобождения; повторная выдача создает отдельный объект cap.
-- Замыкания — доверенная реализация класса: они могут читать закрытые поля, вызывать поведение и возвращать объекты. Автор отвечает за раскрываемые данные и побочные эффекты. Для ограничения вложенного объекта замыкание может вернуть его cap. Глубокая неизменяемость не обеспечивается.
-- Выдать любой объявленный cap может код, располагающий полным объектом. Отдельных списков разрешенных получателей нет.
-- Набор доступных методов фиксирован декларацией. `:Expects`, `:Returns` и явно типизированные поля проверяют принадлежность объекта типу cap во время выполнения. Обращения замыканий к закрытым полям проверяются функцией `value()` при выполнении; статического анализа обращений к полям нет.
+- A declaration accepts exactly a name and a nonempty hash of methods. Each value must be a `CODE` reference. The old field-list syntax is not supported.
+- Cap names and method names must be identifiers without `::`. Conflicts with infrastructure methods (`new`, `as_cap`, `DESTROY`, `can`, and others) are prohibited. The `Class::Cap::Name` namespace is reserved for the framework. Duplicate hash keys follow ordinary Perl rules: the last value wins.
+- A cap exposes only its declared methods. It does not inherit methods from its owner and has no public constructor. The supplied hash is copied at declaration time; subsequent changes to it do not alter the cap interface.
+- Closures receive the original object followed by the call arguments. Perl signatures may constrain the arguments. Calling context (scalar/list/void), results, and exceptions are passed through unchanged; closure return types are not implicitly checked.
+- The underlying data is not copied. A cap keeps the original object alive until the cap is released; issuing a cap again creates a separate cap object.
+- Closures are trusted class implementations: they can read private fields, invoke behavior, and return objects. The author is responsible for exposed data and side effects. To restrict access to a nested object, a closure may return that object's cap. Deep immutability is not guaranteed.
+- Any code holding the full object can issue any declared cap. There are no separate lists of authorized recipients.
+- The available methods are fixed by the declaration. `:Expects`, `:Returns`, and explicitly typed fields validate cap type membership at runtime. Closure access to private fields is checked by `value()` at runtime; field access is not statically analyzed.
 
-Cap — интерфейс конкретного класса, а не наследник его реализации. Одинаковые наборы методов у разных классов образуют разные типы. Переименование внутреннего поля требует обновить использующие его замыкания, сохранив публичные имена методов cap.
+A cap is an interface belonging to a specific class, not a subclass of its implementation. Identical sets of methods declared by different classes produce different types. Renaming an internal field requires updating the closures that reference it, while keeping the cap's public method names unchanged.
 
-### Теги импорта
+### Import Tags
 
-Без аргументов `use Elegant::Perl` включает `:all`. Чтобы не включать возможности без необходимости, можно выбрать тег:
+Without arguments, `use Elegant::Perl` enables `:all`. To avoid enabling features unnecessarily, select a tag:
 
-| Тег | Что импортирует |
+| Tag | Imports |
 | --- | --- |
 | `:core` | `strict`, `warnings`, `utf8` |
-| `:features_532` | bundle возможностей Perl 5.32 |
-| `:signatures` | сигнатуры подпрограмм |
-| `:isa` | оператор `isa` |
-| `:try` / `:defer` | соответствующие `Feature::Compat`-модули |
-| `:modern` | `:core` и `:features_532` |
-| `:compat` | `:try` и `:defer` |
-| `:all` | все перечисленные выше; включен по умолчанию |
+| `:features_532` | Perl 5.32 feature bundle |
+| `:signatures` | subroutine signatures |
+| `:isa` | `isa` operator |
+| `:try` / `:defer` | corresponding `Feature::Compat` modules |
+| `:modern` | `:core` and `:features_532` |
+| `:compat` | `:try` and `:defer` |
+| `:all` | all of the above; enabled by default |
 
-## Ограничения и чего фреймворк не обещает
+## Limitations and Non-Goals
 
-Ограничения здесь намеренные, но подходят не каждому Perl-проекту:
+These restrictions are intentional, but they will not suit every Perl project:
 
-- **Нет наследования реализации.** Вместо него используются контракты и композиция.
-- **Нет пользовательских конструкторов.** `new()` генерируется фреймворком; все объявленные поля обязательны, значения по умолчанию и опциональные поля не предусмотрены.
-- **`undef` и неblessed-ссылки не являются значениями полей.** Допустимы определенные скаляры и blessed-объекты.
-- **Нет глубокой неизменяемости.** Нельзя менять саму таблицу состояния через обычный доступ к объекту, но объект, записанный в поле, может иметь изменяемое внутреннее состояние.
-- **Нет статической типизации.** Проверки контрактов выполняются во время загрузки/вызова, а не доказывают корректность программы.
-- **Не все проверки результата возможны в любом контексте Perl.** Значение, вызванное в void-контексте, невозможно проверить как возвращаемый результат.
-- **Perl::Critic-политики — не доказательство корректности.** Это ограниченный набор стилевых и структурных правил, а не универсальный анализатор безопасности.
+- **No implementation inheritance.** Contracts and composition are used instead.
+- **No custom constructors.** `new()` is generated by the framework; all declared fields are required, with no default values or optional fields.
+- **`undef` and unblessed references are not valid field values.** Defined scalars and blessed objects are permitted.
+- **No deep immutability.** The state table itself cannot be modified through ordinary object access, but an object stored in a field may have mutable internal state.
+- **No static typing.** Contract checks occur at load time or during calls; they do not prove program correctness.
+- **Return-value checks are not possible in every Perl context.** A return value cannot be validated when a method is invoked in void context.
+- **Perl::Critic policies do not prove correctness.** They provide a limited set of stylistic and structural checks, not a general-purpose security analyzer.
 
-## Проверка проекта
+## Checking a Project
 
-Ошибки конструктора и вызовов контрактных методов указывают на место вызова в пользовательском коде. Ошибки типов полей и контрактов, обнаруженные при финализации класса (в том числе в `CHECK`), указывают на сохраненное место декларации. Ошибки внутри пользовательских замыканий и методов сохраняют свое исходное сообщение и место возникновения.
+Constructor errors and contract method invocation errors point to the call site in user code. Field type and contract errors detected during class finalization (including in `CHECK`) point to the recorded declaration site. Errors raised inside user-defined closures and methods retain their original messages and locations.
 
-Зависимости перечислены в метаданных дистрибутива. В checkout тесты можно запустить так:
+Dependencies are listed in the distribution metadata. From a checkout, run the tests with:
 
 ```sh
 prove -Ilib -r t
 ```
 
-Проверка политиками Perl::Critic:
+Run the Perl::Critic policies with:
 
 ```sh
 perl -Ilib bin/elegant-perl check lib t
 ```
 
-Без путей команда проверяет `lib`. Поддерживаются файлы `.pm`, `.pl` и `.t`.
+Without paths, the command checks `lib`. Files with the `.pm`, `.pl`, and `.t` extensions are supported.
 
-## Установка
+## Installation
 
-После сборки релиза на CPAN:
+After the release is published to CPAN:
 
 ```sh
 cpanm Elegant::Perl
 ```
 
-Для разработки из checkout сначала установите зависимости дистрибутива и выполните `perl Makefile.PL`, `make test`.
+For development from a checkout, first install the distribution dependencies, then run `perl Makefile.PL` and `make test`.
 
-## Совместимость
+## Compatibility
 
-Требуется Perl **5.32 или новее**.
+Requires Perl **5.32 or later**.
 
-## Лицензия
+## License
 
-Лицензия пока не указана. Перед публикацией на CPAN выберите лицензию и внесите ее в метаданные дистрибутива.
+MIT
