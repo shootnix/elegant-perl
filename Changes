@@ -1,0 +1,17 @@
+Revision history for Elegant-Perl
+
+Unreleased
+    - Report validation failures at user call sites or saved field/contract
+      declarations, including deferred CHECK validation. Repair the research
+      billing example to pass typed caps and use constructor-injected state.
+    - Allow optional field types (scalars, contracts, and caps), checked by
+      generated constructors using the existing contract validators.
+    - Fix critic policies crashing when PPI searches find no matching nodes.
+    - Add named callback-based caps, explicit as_cap() issuance, and cap
+      types in Expects/Returns contracts. Public method names are independent
+      of private fields; callbacks receive the source object and arguments.
+
+0.01  2026-10-08
+    - Initial development release.
+    - Add object DSL, contracts, runtime validation, Perl::Critic policies,
+      and the elegant-perl command-line checker.

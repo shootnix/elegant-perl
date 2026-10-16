@@ -1,0 +1,915 @@
+package Elegant::Perl;
+
+use v5.32;
+use strict;
+use warnings;
+
+use Elegant::Perl::Error qw(croak location load_module invoke);
+use Hash::Util qw(lock_hashref);
+use Hash::Util::FieldHash qw(fieldhash);
+use Module::Runtime qw(use_module);
+use Scalar::Util qw(blessed refaddr);
+use Sub::Util qw(set_subname subname);
+use Import::Into;
+
+use Elegant::Perl::Contract ();
+use Elegant::Perl::Cap ();
+
+our $VERSION = '0.01';
+
+my %CLASSES;
+my %TAGS;
+
+BEGIN {
+  %TAGS = (
+    core => [
+      'utf8',
+      'strict',
+      'warnings',
+    ],
+
+    features_532 => [
+      [feature => ':5.32'],
+    ],
+
+    signatures => [
+      [feature      => 'signatures'],
+      [experimental => 'signatures'],
+    ],
+
+    isa => [
+      [feature      => 'isa'],
+      [experimental => 'isa'],
+    ],
+
+    try => [
+      'Feature::Compat::Try',
+    ],
+
+    defer => [
+      'Feature::Compat::Defer',
+    ],
+
+    modern => [
+      ':core',
+      ':features_532',
+    ],
+
+    compat => [
+      ':try',
+      ':defer',
+    ],
+
+    all => [
+      ':modern',
+      ':signatures',
+      ':isa',
+      ':compat',
+    ],
+  );
+}
+
+
+sub import {
+    my ($class, @args) = @_;
+
+    my $target = caller;
+    my $origin = location();
+    croak "$target is a generated cap type" if Elegant::Perl::Cap::_is_cap($target);
+    croak "$target already uses Elegant::Perl" if exists $CLASSES{$target};
+
+    @args = (':all') unless @args;
+    my @items = $class->_expand_tags(@args);
+    for my $item (@items) {
+        if (ref($item) eq 'CODE') {
+            $item->($target);
+            next;
+        }
+        my ($module, @import_args) = ref($item) eq 'ARRAY' ? @$item : ($item);
+        use_module($module)->import::into($target, @import_args);
+    }
+
+    no strict 'refs';
+    for my $name (qw(field value implements cap as_cap)) {
+        croak "$target already defines $name()" if defined *{"${target}::$name"}{CODE};
+    }
+    #
+    # Private object state.
+    #
+    # The actual blessed object contains identity only.
+    #
+    fieldhash my %state;
+
+    my @fields;
+    my %fields;
+    my %field_types;
+    my %field_locations;
+    my %field_validators;
+
+    my @contracts;
+    my %contracts;
+    my %cap_issuers;
+
+    my $sealed        = 0;
+    my $finalized     = 0;
+    my $finalizing    = 0;
+    my $new_installed = 0;
+
+    my (
+        $new,
+        $field,
+        $value,
+        $implements,
+        $cap,
+        $as_cap,
+        $finalize,
+        $ensure_new,
+    );
+    #
+    # Generated constructor.
+    #
+    $new = sub {
+        my ($invocant, @args) = @_;
+
+        croak "$target->new() must be called as a class method" if ref $invocant;
+        croak "Cannot construct $invocant via $target" unless defined($invocant) && $invocant eq $target;
+        #
+        # Normally CHECK already finalized the class.
+        #
+        # This is also the fallback for classes loaded
+        # using runtime require().
+        #
+        $finalize->();
+
+        croak "$target->new() expects named parameters" if @args % 2;
+        my %values;
+        while (@args) {
+            my $name  = shift @args;
+            my $value = shift @args;
+
+            croak "$target->new(): field name must be a string" if !defined($name) || ref($name);
+            croak "$target->new(): unknown field '$name'" unless exists $fields{$name};
+            croak "$target->new(): field '$name' specified more than once" if exists $values{$name};
+
+            _validate_field_value(
+                class => $target,
+                field => $name,
+                value => $value,
+            );
+
+            if (my $validator = $field_validators{$name}) {
+                croak "$target->new(): field '$name' does not satisfy $validator->{name}"
+                    unless $validator->{check}->($value);
+            }
+
+            $values{$name} = $value;
+        }
+
+        for my $name (@fields) {
+            croak "$target->new(): missing required field '$name'" unless exists $values{$name};
+        }
+        #
+        # Object contains identity only.
+        #
+        my $identity;
+        my $self = bless \$identity, $target;
+        my %object_state = map { $_ => $values{$_} } @fields;
+        #
+        # State itself is readonly after construction.
+        #
+        # Since unblessed references cannot enter the state,
+        # there is no mutable ARRAY/HASH/etc. hidden underneath.
+        #
+        lock_hashref(\%object_state);
+        $state{$self} = \%object_state;
+
+        return $self;
+    };
+
+
+    $new = set_subname("${target}::new", $new);
+    #
+    # Install generated new().
+    #
+    # If the package defined its own constructor,
+    # fail instead.
+    #
+    $ensure_new = sub {
+        my $existing = *{"${target}::new"}{CODE};
+        if ($existing) {
+            my $ours = $new_installed && refaddr($existing) == refaddr($new);
+            croak "$target defines its own new(); " . "constructors are generated by Elegant::Perl" unless $ours;
+        }
+        unless ($new_installed) {
+            *{"${target}::new"} = $new;
+            $new_installed = 1;
+        }
+
+        return;
+    };
+    #
+    # field 'amount';
+    #
+    $field = sub {
+        croak "field() may only be used inside package $target" unless caller eq $target;
+        croak 'field() expects a name and an optional type' unless @_ == 1 || @_ == 2;
+
+        my ($name, $type) = @_;
+
+        croak 'field name must be defined' unless defined $name;
+        croak "Invalid field name '$name'" if ref($name) || $name !~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
+        croak "$target object layout is already sealed" if $sealed;
+        croak "$target field '$name' is already declared" if exists $fields{$name};
+
+        if (@_ == 2) {
+            croak "$target field '$name': type must be a type name"
+                unless defined($type) && !ref($type)
+                    && $type =~ /\A[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
+            croak "$target field '$name' cannot use Void" if $type eq 'Void';
+        }
+        
+        $ensure_new->();
+        $fields{$name} = 1;
+        $field_types{$name} = $type if @_ == 2;
+        $field_locations{$name} = location();
+        push @fields, $name;
+
+        return;
+    };
+    #
+    # implements 'Money';
+    #
+    $implements = sub {
+        croak "implements() may only be used inside package $target" unless caller eq $target;
+        croak 'implements() expects at least one contract' unless @_;
+        croak "$target contract list is already sealed" if $sealed;
+
+        $ensure_new->();
+
+        for my $contract (@_) {
+            croak 'Contract name must be a package name'
+                unless defined($contract)
+                    && !ref($contract)
+                    && $contract =~
+                        /\A[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
+
+            croak "$target already implements $contract" if $contracts{$contract};
+            load_module($contract, "contract '$contract'");
+            croak
+                "$contract is not declared "
+                . "with Elegant::Perl::Contract"
+                unless
+                    Elegant::Perl::Contract::_is_contract(
+                        $contract
+                    );
+
+            $contracts{$contract} = 1;
+            push @contracts, $contract;
+        }
+
+        return;
+    };
+    #
+    # value $self, 'amount';
+    #
+    # This is deliberately not a method.
+    #
+    $value = sub {
+        croak "value() is private to package $target" unless caller eq $target;
+        croak 'value() expects object and field name' unless @_ == 2;
+
+        my ($self, $name) = @_;
+
+        my $actual_class = blessed($self);
+
+        croak "value() expects an instance of $target" unless defined($actual_class) && $actual_class eq $target;
+        croak "$target has no field '$name'" unless defined($name) && exists $fields{$name};
+        croak "Invalid $target object" unless exists $state{$self};
+
+        return $state{$self}{$name};
+    };
+    #
+    # Declare a named interface implemented by package-local callbacks.
+    #
+    $cap = sub {
+        croak "cap() may only be used inside package $target" unless caller eq $target;
+        croak 'cap() expects a name and a hash reference of methods' unless @_ == 2;
+        my ($name, $cap_hash) = @_;
+        croak 'Cap name must be an identifier'
+            unless defined($name) && !ref($name)
+                && $name =~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
+        croak "$target cap list is already sealed" if $sealed;
+        $cap_issuers{$name} = Elegant::Perl::Cap::_declare($target, $name, $cap_hash);
+        return;
+    };
+
+    # Only holders of a real source object can issue its caps.
+    $as_cap = sub {
+        croak "$target\::as_cap() expects object and cap name" unless @_ == 2;
+        my ($self, $name) = @_;
+        croak "as_cap() expects an instance of $target"
+            unless (blessed($self) // '') eq $target && exists $state{$self};
+        croak 'Cap name must be an identifier'
+            unless defined($name) && !ref($name)
+                && $name =~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
+        $finalize->();
+        croak "$target has no cap '$name'" unless exists $cap_issuers{$name};
+        return $cap_issuers{$name}->($self);
+    };
+    #
+    # Finalize the object class.
+    #
+    # This happens once.
+    #
+    $finalize = sub {
+        return if $finalized;
+        local $Elegant::Perl::Error::LOCATION = $origin;
+
+        croak "Recursive finalization of $target" if $finalizing;
+        $finalizing = 1;
+        my $ok = eval {
+            $ensure_new->();
+            _assert_helper_unchanged($target, field => $field);
+            _assert_helper_unchanged($target, value => $value);
+            _assert_helper_unchanged($target, implements => $implements);
+            _assert_helper_unchanged($target, cap => $cap);
+            _assert_helper_unchanged($target, as_cap => $as_cap);
+            for my $name (@fields) {
+                next unless exists $field_types{$name};
+                local $Elegant::Perl::Error::LOCATION = $field_locations{$name};
+                $field_validators{$name} = Elegant::Perl::Contract::_compile_validator(
+                    $field_types{$name}, $target,
+                );
+            }
+            _finalize_contracts(class     => $target, contracts => \@contracts);
+
+            $sealed    = 1;
+            $finalized = 1;
+
+            1;
+        };
+
+        my $error = $@;
+        $finalizing = 0;
+        die $error unless $ok;
+        return;
+    };
+
+
+    #
+    # Export class DSL.
+    #
+    *{"${target}::field"} =
+        set_subname(
+            "${target}::field",
+            $field,
+        );
+
+
+    *{"${target}::value"} =
+        set_subname(
+            "${target}::value",
+            $value,
+        );
+
+
+    *{"${target}::implements"} =
+        set_subname(
+            "${target}::implements",
+            $implements,
+        );
+
+
+    #
+    *{"${target}::cap"} = set_subname("${target}::cap", $cap);
+    *{"${target}::as_cap"} = set_subname("${target}::as_cap", $as_cap);
+
+    #
+    # Global internal metadata.
+    #
+    # Needed for ContractName type validation.
+    #
+    $CLASSES{$target} = {
+        contracts => \%contracts,
+        finalize  => $finalize,
+    };
+
+
+    #
+    # Every Elegant class gets new().
+    #
+    $ensure_new->();
+
+
+    return;
+}
+
+
+sub _finalize_contracts {
+    my (%args) = @_;
+
+    my $class     = $args{class};
+    my $contracts = $args{contracts};
+
+    no strict 'refs';
+    #
+    # No implementation inheritance.
+    #
+    croak
+        "$class uses implementation inheritance; "
+        . "Elegant::Perl forbids inheritance"
+        if @{"${class}::ISA"};
+    #
+    # Build complete public contract.
+    #
+    my %required;
+    for my $contract (@$contracts) {
+
+        my $definition =
+            Elegant::Perl::Contract::_definition(
+                $contract
+            );
+
+        for my $method (keys %{ $definition->{methods} }) {
+            my $spec = $definition->{methods}{$method};
+            if (my $existing = $required{$method}) {
+                croak
+                    "Contract conflict for "
+                    . "$class\::$method between "
+                    . "$existing->{contract} "
+                    . "and $contract"
+                    unless _same_signature(
+                        $existing->{spec},
+                        $spec,
+                    );
+                next;
+            }
+            $required{$method} = {
+                contract => $contract,
+                spec     => $spec,
+            };
+        }
+    }
+
+    $CLASSES{$class}{methods} = {
+        map {
+            $_ => {
+                contract =>
+                    $required{$_}{contract},
+
+                kind =>
+                    $required{$_}{spec}{kind},
+            }
+        } keys %required
+    };
+
+    #
+    # contract -> implementation
+    #
+    for my $method (sort keys %required) {
+        my $full_name = "${class}::$method";
+        my $code = *{$full_name}{CODE};
+        croak
+            "$class implements "
+            . "$required{$method}{contract}, "
+            . "but does not implement $method()"
+            unless $code
+                && defined &{$full_name};
+    }
+    #
+    # implementation -> contract
+    #
+    # Every named package sub is public behaviour.
+    #
+    my %infrastructure = map {
+        $_ => 1
+    } qw(
+        new
+        field
+        value
+        implements
+        cap
+        as_cap
+        DESTROY
+    );
+
+    my $stash = \%{"${class}::"};
+    for my $name (sort keys %$stash) {
+        next if $infrastructure{$name};
+        my $code = *{"${class}::$name"}{CODE};
+        next unless $code;
+        next unless defined &{"${class}::$name"};
+        #
+        # Ignore imported functions.
+        #
+        my $declared_name = subname($code);
+        next
+            unless defined($declared_name)
+                && $declared_name
+                    eq "${class}::$name";
+        croak
+            "$class\::$name is public, "
+            . "but is not declared by any "
+            . "implemented contract"
+            unless exists
+                $required{$name};
+    }
+    #
+    # Structural contracts have zero runtime cost.
+    #
+    # Only methods with runtime type constraints
+    # receive wrappers.
+    #
+    for my $method (sort keys %required) {
+        my $spec = $required{$method}{spec};
+        next unless exists $spec->{expects} || exists $spec->{returns};
+        _install_contract_wrapper(
+            class  => $class,
+            method => $method,
+            spec   => $spec,
+        );
+    }
+
+    return;
+}
+
+
+sub _install_contract_wrapper {
+    my (%args) = @_;
+
+    my $class  = $args{class};
+    my $method = $args{method};
+    my $spec   = $args{spec};
+    local $Elegant::Perl::Error::LOCATION = $spec->{location}
+        // $Elegant::Perl::Error::LOCATION;
+
+    no strict 'refs';
+    my $full_name = "${class}::$method";
+
+    my $implementation = *{$full_name}{CODE};
+    #
+    # Compile argument validators once.
+    #
+    my $expects;
+    if (exists $spec->{expects}) {
+        $expects = [
+            map {
+                Elegant::Perl::Contract::_compile_validator(
+                    $_,
+                    $class,
+                )
+            } @{ $spec->{expects} }
+        ];
+    }
+    #
+    # Compile return validator once.
+    #
+    my $returns;
+    if (exists $spec->{returns}) {
+        $returns = $spec->{returns} eq 'Void' 
+            ? {
+                name => 'Void',
+                void => 1,
+            }
+
+            : Elegant::Perl::Contract::_compile_validator(
+                $spec->{returns},
+                $class,
+            );
+    }
+
+    my $wrapper = sub { 
+        my ($self, @method_args) = @_;
+        #
+        # No class methods.
+        #
+        my $actual_class = blessed($self);
+        croak
+            "$full_name() must be called "
+            . "on an instance of $class"
+            unless defined($actual_class)
+                && $actual_class eq $class;
+        #
+        # Arguments.
+        #
+        if ($expects) {
+            croak
+                "$full_name() expects "
+                . scalar(@$expects)
+                . ' argument(s), got '
+                . scalar(@method_args)
+                unless
+                    @method_args == @$expects;
+
+            for my $index (0 .. $#$expects) {
+                my $validator = $expects->[$index];
+                croak
+                    "$full_name(): argument "
+                    . ($index + 1)
+                    . " does not satisfy "
+                    . $validator->{name}
+                    unless
+                        $validator->{check}->(
+                            $method_args[$index]
+                        );
+            }
+        }
+        #
+        # Preserve Perl call context.
+        #
+        my $context = wantarray;
+        #
+        # No return contract.
+        #
+        if (!$returns) {
+            if (!defined $context) {
+                invoke($implementation,
+                    $self,
+                    @method_args,
+                );
+                return;
+            }
+            return $context
+                ? invoke($implementation,
+                    $self,
+                    @method_args,
+                )
+
+                : scalar invoke($implementation,
+                    $self,
+                    @method_args,
+                );
+        }
+        #
+        # Returns(Void)
+        #
+        if ($returns->{void}) {
+            #
+            # In void context there is no observable
+            # return value to validate without changing
+            # the implementation's context.
+            #
+            if (!defined $context) {
+                invoke($implementation,
+                    $self,
+                    @method_args,
+                );
+
+                return;
+            }
+            if ($context) {
+                my @result =
+                    invoke($implementation,
+                        $self,
+                        @method_args,
+                    );
+                croak
+                    "$full_name() declares "
+                    . "Returns(Void), "
+                    . "but returned a value"
+                    if @result;
+                return;
+            }
+            my $result =
+                invoke($implementation,
+                    $self,
+                    @method_args,
+                );
+            croak
+                "$full_name() declares "
+                . "Returns(Void), "
+                . "but returned a value"
+                if defined $result;
+
+            return;
+        }
+        #
+        # Typed return in void context.
+        #
+        # There is nothing observable to validate,
+        # and changing context would alter Perl semantics.
+        #
+        if (!defined $context) {
+            invoke($implementation,
+                $self,
+                @method_args,
+            );
+            return;
+        }
+        #
+        # Typed return in list context.
+        #
+        # Elegant::Perl contracts return one value.
+        #
+        if ($context) {
+            my @result =
+                invoke($implementation,
+                    $self,
+                    @method_args,
+                );
+            croak
+                "$full_name() must return "
+                . "exactly one value"
+                unless @result == 1;
+            croak
+                "$full_name() return value "
+                . "does not satisfy "
+                . $returns->{name}
+                unless
+                    $returns->{check}->(
+                        $result[0]
+                    );
+            return @result;
+        }
+        #
+        # Typed return in scalar context.
+        #
+        my $result =
+            invoke($implementation,
+                $self,
+                @method_args,
+            );
+        croak
+            "$full_name() return value "
+            . "does not satisfy "
+            . $returns->{name}
+            unless
+                $returns->{check}->(
+                    $result
+                );
+        return $result;
+    };
+
+    $wrapper =
+        set_subname(
+            $full_name,
+            $wrapper,
+        );
+    {
+        no warnings 'redefine';
+
+        *{$full_name} =
+            $wrapper;
+    }
+
+    return;
+}
+
+
+sub _same_signature {
+    my ($left, $right) = @_;
+
+    return 0
+        unless
+            ($left->{kind} // '')
+            eq
+            ($right->{kind} // '');
+
+    return 0
+        unless
+            (exists $left->{expects})
+            ==
+            (exists $right->{expects});
+
+    return 0
+        unless
+            (exists $left->{returns})
+            ==
+            (exists $right->{returns});
+
+    if (exists $left->{expects}) {
+
+        return 0
+            unless
+                @{ $left->{expects} }
+                ==
+                @{ $right->{expects} };
+
+        for my $index (
+            0 .. $#{ $left->{expects} }
+        ) {
+            return 0
+                unless
+                    $left->{expects}[$index]
+                    eq
+                    $right->{expects}[$index];
+        }
+    }
+
+    if (exists $left->{returns}) {
+        return 0
+            unless
+                $left->{returns}
+                eq
+                $right->{returns};
+    }
+
+    return 1;
+}
+
+
+sub _assert_helper_unchanged {
+    my ($class, $name, $expected) = @_;
+
+    no strict 'refs';
+    my $actual = *{"${class}::$name"}{CODE};
+    croak
+        "$class overrides "
+        . "Elegant::Perl helper $name()"
+        unless $actual
+            && refaddr($actual)
+                == refaddr($expected);
+
+
+    return;
+}
+
+
+sub _validate_field_value {
+    my (%args) = @_;
+
+    my $class = $args{class};
+    my $field = $args{field};
+    my $value = $args{value};
+    #
+    # Atomic Perl scalar.
+    #
+    return if defined($value) && !ref($value);
+    #
+    # Object.
+    #
+    return if defined blessed($value);
+    #
+    # No undef.
+    # No ARRAY/HASH/SCALAR/CODE/etc.
+    #
+    croak
+        "$class->new(): "
+        . "field '$field' must contain "
+        . "a defined scalar or a blessed object";
+}
+
+
+#
+# Internal support for:
+#
+#     :Expects(Money)
+#     :Returns(Money)
+#
+# where Money is an Elegant::Perl contract.
+#
+sub _object_implements_contract {
+    my ($object, $contract) = @_;
+
+    my $class = blessed($object);
+    return 0 unless defined $class;
+    my $meta = $CLASSES{$class};
+    #
+    # A random blessed Perl object cannot satisfy
+    # an Elegant contract unless its class participates
+    # in Elegant::Perl.
+    #
+    return 0 unless $meta;
+    #
+    # Ensure metadata is complete.
+    #
+    $meta->{finalize}->();
+
+    return
+        $meta->{contracts}{$contract}
+        ? 1
+        : 0;
+}
+
+sub _expand_tags {
+  my ($class, @args) = @_;
+
+  my @items;
+
+  for my $arg (@args) {
+    if ($arg =~ s/^://) {
+      croak "Unknown Elegant::Perl tag :$arg"
+        unless exists $TAGS{$arg};
+
+      push @items, $class->_expand_tags(@{ $TAGS{$arg} });
+      next;
+    }
+
+    push @items, $arg;
+  }
+
+  return @items;
+}
+
+#
+# Validate all classes loaded during normal compilation.
+#
+# Runtime-loaded classes are finalized by generated new().
+#
+CHECK {
+    $_->{finalize}->()
+        for values %CLASSES;
+}
+
+
+1;

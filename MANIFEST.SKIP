@@ -1,0 +1,7 @@
+^blib/
+^Makefile$
+^MANIFEST\.bak$
+^MYMETA\.(?:json|yml)$
+^pm_to_blib$
+^Elegant-Perl-[0-9.]+/
+^research/

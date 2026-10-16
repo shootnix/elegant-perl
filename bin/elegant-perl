@@ -1,0 +1,102 @@
+#!/usr/bin/env perl
+
+use v5.32;
+use strict;
+use warnings;
+
+use File::Find qw(find);
+use Getopt::Long qw(GetOptionsFromArray);
+use Perl::Critic;
+
+
+sub main {
+    my (@args) = @_;
+
+    my $command = shift @args // '';
+    if ($command eq 'check') {
+        return check(@args);
+    }
+    usage();
+
+    return 2;
+}
+
+
+sub check {
+    my (@args) = @_;
+
+    my $verbose = 0;
+    GetOptionsFromArray(
+        \@args,
+        'verbose|v' => \$verbose,
+    ) or return 2;
+
+    @args = ('lib') unless @args;
+    my @files = collect_files(@args);
+
+    my $critic = Perl::Critic->new( -theme => 'elegantperl');
+
+    my $violations = 0;
+
+    for my $file (@files) {
+        my @problems =
+            $critic->critique(
+                $file
+            );
+
+        next unless @problems;
+        ++$violations for @problems;
+        print "$file\n" if $verbose;
+        print $_ for @problems;
+    }
+
+    return $violations ? 1 : 0;
+}
+
+
+sub collect_files {
+    my (@paths) = @_;
+
+    my @files;
+    for my $path (@paths) {
+        if (-f $path) {
+            push @files, $path;
+            next;
+        }
+
+        die "Path does not exist: $path\n"
+            unless -d $path;
+
+        find(
+            {
+                no_chdir => 1,
+                wanted => sub {
+                    return unless -f $_;
+                    return unless /\.(?:pm|pl|t)\z/;
+                    push @files, $File::Find::name;
+                },
+            },
+            $path,
+        );
+    }
+
+    return sort @files;
+}
+
+sub usage {
+    print STDERR <<'USAGE';
+Usage:
+
+    elegant-perl check [paths...]
+
+Examples:
+
+    elegant-perl check lib
+    elegant-perl check lib t
+    elegant-perl check -v lib
+
+USAGE
+}
+
+
+exit main(@ARGV);
